@@ -1,8 +1,6 @@
 import numpy as np
-from NNAero.optimization.opti import Opti
 from abc import abstractmethod, ABC
 import copy
-from typing import Any
 import dill
 from pathlib import Path
 import sys

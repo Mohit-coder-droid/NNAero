@@ -1,9 +1,9 @@
 import numpy as np
 from matplotlib import path
-from aerosandbox.common import AeroSandboxObject
+from nnaero.common import NNAeroObject
 
 
-class Polygon(AeroSandboxObject):
+class Polygon(NNAeroObject):
     def __init__(self, coordinates: np.ndarray):
         """
         Creates a polygon object.
