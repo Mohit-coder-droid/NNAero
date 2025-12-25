@@ -1,3 +1,5 @@
+# this file has been copied and modified from the repository https://github.com/peterdsharpe/AeroSandbox/blob/790ac4f2ed6754e61046fe8cfa5ebb2004ab0c61/aerosandbox/geometry/airfoil/airfoil_families.py
+
 import numpy as np
 from scipy.special import comb
 import re
