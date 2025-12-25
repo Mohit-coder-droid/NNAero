@@ -3,7 +3,6 @@ from NNAero.optimization.opti import Opti
 from abc import abstractmethod, ABC
 import copy
 from typing import Any
-import casadi as cas
 import dill
 from pathlib import Path
 import sys
@@ -124,121 +123,6 @@ class NNAeroObject(ABC):
         Returns a deep copy of the object.
         """
         return copy.deepcopy(self)
-
-    def substitute_solution(
-        self,
-        sol: cas.OptiSol,
-        inplace: bool = None,
-    ):
-        """
-        Substitutes a solution from CasADi's solver recursively as an in-place operation.
-
-        In-place operation. To make it not in-place, do `y = copy.deepcopy(x)` or similar first.
-        :param sol: OptiSol object.
-        :return:
-        """
-        import warnings
-
-        warnings.warn(
-            "This function is deprecated and will break at some future point.\n"
-            "Use `sol(x)`, which now works recursively on complex data structures.",
-            DeprecationWarning,
-        )
-
-        # Set defaults
-        if inplace is None:
-            inplace = True
-
-        def convert(item):
-            """
-            This is essentially a supercharged version of sol(), which works for more iterable types.
-
-            Args:
-                item:
-
-            Returns:
-
-            """
-
-            # If it can be converted, do the conversion.
-            if np.is_casadi_type(item, recursive=False):
-                return sol(item)
-
-            t = type(item)
-
-            # If it's a Python iterable, recursively convert it, and preserve the type as best as possible.
-            if issubclass(t, list):
-                return [convert(i) for i in item]
-            if issubclass(t, tuple):
-                return tuple([convert(i) for i in item])
-            if issubclass(t, set) or issubclass(t, frozenset):
-                return {convert(i) for i in item}
-            if issubclass(t, dict):
-                return {convert(k): convert(v) for k, v in item.items()}
-
-            # Skip certain Python types
-            for type_to_skip in (
-                bool,
-                str,
-                int,
-                float,
-                complex,
-                range,
-                type(None),
-                bytes,
-                bytearray,
-                memoryview,
-            ):
-                if issubclass(t, type_to_skip):
-                    return item
-
-            # Skip certain CasADi types
-            for type_to_skip in (cas.Opti, cas.OptiSol):
-                if issubclass(t, type_to_skip):
-                    return item
-
-            # If it's any other type, try converting its attribute dictionary:
-            try:
-                newdict = {k: convert(v) for k, v in item.__dict__.items()}
-
-                if inplace:
-                    for k, v in newdict.items():
-                        setattr(item, k, v)
-
-                    return item
-
-                else:
-                    newitem = copy.copy(item)
-                    for k, v in newdict.items():
-                        setattr(newitem, k, v)
-
-                    return newitem
-
-            except AttributeError:
-                pass
-
-            # Try converting it blindly. This will catch most NumPy-array-like types.
-            try:
-                return sol(item)
-            except (NotImplementedError, TypeError, ValueError):
-                pass
-
-            # At this point, we're not really sure what type the object is. Raise a warning and return the item, then hope for the best.
-            import warnings
-
-            warnings.warn(
-                f"In solution substitution, could not convert an object of type {t}.\n"
-                f"Returning it and hoping for the best.",
-                UserWarning,
-            )
-
-            return item
-
-        if inplace:
-            convert(self)
-
-        else:
-            return convert(self)
 
 
 def load(
