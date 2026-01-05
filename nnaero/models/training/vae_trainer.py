@@ -49,7 +49,7 @@ class VAETrainer(BaseTrainer):
         # 3. KL Annealing Weight
         beta = self.kl_weight
         if self.kl_annealing:
-            beta *= min(1.0, epoch / self.warmup_epochs)
+            beta *= min(1.0, (epoch+1) / self.warmup_epochs)
             
         total_loss = (recon_loss + beta * kl_loss) / x.size(0)
         

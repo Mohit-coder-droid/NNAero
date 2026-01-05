@@ -75,6 +75,7 @@ class BaseTrainer(ABC):
             'optimizer_state_dict': self.optimizer.state_dict(),
         }, path)
         self.logger.info(f"Checkpoint saved to {path}")
+        return path
 
     def fit(self, train_loader: DataLoader, epochs: int):
         for epoch in range(1, epochs + 1):
