@@ -28,11 +28,20 @@ import sys
 sys.path.insert(0, os.path.abspath('../../../nnaero')) # Adjust path to where your .py files are
 
 extensions = [
+    'nbsphinx',
+    'nbsphinx_link',
     'sphinx.ext.autodoc',    # Pulls docstrings from code
     'sphinx.ext.napoleon',   # Supports Google/NumPy style docstrings
     'sphinx.ext.viewcode',   # Adds links to highlighted source code
+    'sphinx.ext.mathjax',
 ]
 
+# Optional: Do not execute notebooks when building docs
+# (Useful if your notebooks take a long time to run)
+nbsphinx_execute = 'never' 
+
+# Optional: Add a timeout for cell execution (in seconds)
+nbsphinx_timeout = 60
 
 html_theme = "sphinx_rtd_theme"
 html_static_path = ['_static']

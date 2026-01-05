@@ -11,8 +11,9 @@ NNAero documentation
    :caption: Contents:
 
    usage
-   api
    parameterization/index
    solver/index
    optimization/index
    models/index
+   studies/index
+   api
