@@ -4,8 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
-import numpy as np
-import logging
+from nnaero.models.base import *
 
 '''https://arxiv.org/abs/2004.12585'''
 class BN_Layer(nn.Module):
@@ -35,46 +34,49 @@ class BN_Layer(nn.Module):
         return x
 
 class VAE(nn.Module):
-    def __init__(self, feature_size=257, latent_size=32):
+    def __init__(
+        self, 
+        feature_size: int = 257, 
+        latent_size: int = 32,
+        encoder_config: list = None,
+        decoder_config: list = None
+    ):
         super(VAE, self).__init__()
-        self.latent_size = latent_size
         self.feature_size = feature_size
+        
+        if encoder_config is None:
+            encoder_config = [2048, "relu", 128, "tanh"]
+        
+        if decoder_config is None:
+            decoder_config = [2048, "relu", 128, "relu", feature_size, "tanh"]
 
-        # encode
-        self.fc1  = nn.Linear(feature_size, 2048)
-        self.fc2 = nn.Linear(2048, 128)
-        self.fc21 = nn.Linear(128, latent_size)
-        self.fc22 = nn.Linear(128, latent_size)
-        # self.bn_mu = BN_Layer(latent_size, mu=True)
-        # self.bn_var = BN_Layer(latent_size, mu=False)
+        # --- 1. Build Encoder Body ---
+        self.encoder_body = BaseNetwork(feature_size, encoder_config)
+        
+        # The VAE "Heads" (Mu and LogVar) are attached to the end of the encoder body
+        last_hidden_dim = self.encoder_body.output_dim
+        self.fc_mu = nn.Linear(last_hidden_dim, latent_size)
+        self.fc_logvar = nn.Linear(last_hidden_dim, latent_size)
 
-        # decode
-        self.fc3 = nn.Linear(latent_size, 2048)
-        self.fc4 = nn.Linear(2048, 128)
-        self.fc5 = nn.Linear(128, feature_size)
+        # --- 2. Build Decoder ---
+        self.decoder = BaseNetwork(latent_size, decoder_config)
 
-    def encode(self, x):  
-        h1 = torch.relu(self.fc1(x))
-        h2 = torch.tanh(self.fc2(h1))
-        z_mu = self.fc21(h2)
-        z_logvar = self.fc22(h2)
-        # z_mu = self.bn_mu(z_mu)
-        # z_var = self.bn_var(z_var)
-        return z_mu, z_logvar
+    def encode(self, x):
+        h = self.encoder_body(x)
+        mu = self.fc_mu(h)
+        logvar = self.fc_logvar(h)
+        return mu, logvar
 
     def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5*logvar)
+        std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
-        return mu + eps*std
+        return mu + eps * std
 
     def decode(self, z):
-        z = torch.relu(self.fc3(z))
-        z = torch.relu(self.fc4(z))
-        x = torch.tanh(self.fc5(z))
-        return x
+        return self.decoder(z)
 
     def forward(self, x):
-        x = x.reshape(-1, self.feature_size) # [B, 1, N]
+        x = x.reshape(-1, self.feature_size)
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar
