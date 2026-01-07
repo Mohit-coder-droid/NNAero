@@ -43,6 +43,7 @@ class VAE(nn.Module):
     ):
         super(VAE, self).__init__()
         self.feature_size = feature_size
+        self.latent_size = latent_size
         
         if encoder_config is None:
             encoder_config = [2048, "relu", 128, "tanh"]
