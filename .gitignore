@@ -125,3 +125,5 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+nnaero/models/nn_weights/

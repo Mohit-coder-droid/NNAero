@@ -1,0 +1,1 @@
+from nnaero.models.surrogate_models.neuralfoil import *
