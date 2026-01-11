@@ -7,6 +7,8 @@ from typing import Union
 import os
 from typing import List, Optional, Dict
 
+from nnaero.utils import *
+
 _default_n_points_per_side = 200
 
 
@@ -86,7 +88,7 @@ def get_NACA_coordinates(
     # from here on out
 
     # Make uncambered coordinates
-    x_t = np.cosspace(0, 1, n_points_per_side)  # Generate some cosine-spaced points
+    x_t = cosspace(0, 1, n_points_per_side)  # Generate some cosine-spaced points
     y_t = (
         5
         * thickness
@@ -228,18 +230,18 @@ def get_kulfan_coordinates(
         if deprecated_kwargs.get("enforce_continuous_LE_radius", False):
             lower_weights[0] = -1 * upper_weights[0]
 
-    x = np.cosspace(0, 1, n_points_per_side)  # Generate some cosine-spaced points
+    x = cosspace(0, 1, n_points_per_side)  # Generate some cosine-spaced points
 
     # Class function
     C = (x) ** N1 * (1 - x) ** N2
 
     def shape_function(w):
         # Shape function (Bernstein polynomials)
-        N = np.length(w) - 1  # Order of Bernstein polynomials
+        N = length(w) - 1  # Order of Bernstein polynomials
 
         K = comb(N, np.arange(N + 1))  # Bernstein polynomial coefficients
 
-        dims = (np.length(w), np.length(x))
+        dims = (length(w), length(x))
 
         def wide(vector):
             return np.tile(np.reshape(vector, (1, dims[1])), (dims[0], 1))
@@ -266,8 +268,8 @@ def get_kulfan_coordinates(
     y_upper += x * TE_thickness / 2
 
     # Add Kulfan's leading-edge-modification (LEM)
-    y_lower += leading_edge_weight * (x) * (1 - x) ** (np.length(lower_weights) + 0.5)
-    y_upper += leading_edge_weight * (x) * (1 - x) ** (np.length(upper_weights) + 0.5)
+    y_lower += leading_edge_weight * (x) * (1 - x) ** (length(lower_weights) + 0.5)
+    y_upper += leading_edge_weight * (x) * (1 - x) ** (length(upper_weights) + 0.5)
 
     x = np.concatenate((x[::-1], x[1:]))
     y = np.concatenate((y_upper[::-1], y_lower[1:]))
@@ -381,7 +383,7 @@ def get_kulfan_parameters(
         if normalize_coordinates:
             target_airfoil = target_airfoil.normalize()
 
-        x = np.cosspace(0, 1, n_points_per_side)
+        x = cosspace(0, 1, n_points_per_side)
         target_thickness = target_airfoil.local_thickness(x_over_c=x)
         target_camber = target_airfoil.local_camber(x_over_c=x)
 
@@ -393,11 +395,11 @@ def get_kulfan_parameters(
 
         def shape_function(w):
             # Shape function (Bernstein polynomials)
-            N = np.length(w) - 1  # Order of Bernstein polynomials
+            N = length(w) - 1  # Order of Bernstein polynomials
 
             K = comb(N, np.arange(N + 1))  # Bernstein polynomial coefficients
 
-            dims = (np.length(w), np.length(x))
+            dims = (length(w), length(x))
 
             def wide(vector):
                 return np.tile(np.reshape(vector, (1, dims[1])), (dims[0], 1))
@@ -434,10 +436,10 @@ def get_kulfan_parameters(
 
         # Add Kulfan's leading-edge-modification (LEM)
         y_lower += (
-            leading_edge_weight * (x) * (1 - x) ** (np.length(lower_weights) + 0.5)
+            leading_edge_weight * (x) * (1 - x) ** (length(lower_weights) + 0.5)
         )
         y_upper += (
-            leading_edge_weight * (x) * (1 - x) ** (np.length(upper_weights) + 0.5)
+            leading_edge_weight * (x) * (1 - x) ** (length(upper_weights) + 0.5)
         )
 
         opti.minimize(
@@ -483,7 +485,7 @@ def get_kulfan_parameters(
                 .coordinates
             )
 
-        n_coordinates = np.length(coordinates)
+        n_coordinates = length(coordinates)
 
         x = coordinates[:, 0]
         y = coordinates[:, 1]
