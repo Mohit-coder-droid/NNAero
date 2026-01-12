@@ -277,7 +277,6 @@ def get_kulfan_coordinates(
 
     return coordinates
 
-
 def get_kulfan_parameters(
     coordinates: np.ndarray,
     n_weights_per_side: int = 8,
