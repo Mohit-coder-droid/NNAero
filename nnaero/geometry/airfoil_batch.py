@@ -1,13 +1,18 @@
 # TODO: I can add some statistical analysis for this airfoil batch, which can be done in case of some airfoil datasets
-from nnaero.geometry.airfoil import Airfoil
+# from nnaero.geometry.airfoil import Airfoil
 from nnaero.utils import rotation_matrix_2D, cosspace
+from nnaero.geometry.airfoil_families import (
+    get_NACA_coordinates,
+    get_UIUC_coordinates,
+    get_file_coordinates,
+)
 
 from typing import Union, List, Dict
 from pathlib import Path
 import numpy as np
 from scipy import interpolate
 
-class AirfoilBatch:
+class Airfoil:
     """
     A batch of airfoils stored as a (B, N, 2) array.
     """
@@ -37,14 +42,62 @@ class AirfoilBatch:
 
             resolved_coords = []
             for n, c in zip(self.names, coords_list):
-                af = Airfoil(name=n, coordinates=c)
-                if af.coordinates is None:
+                af_coordinates = self.get_single_airfoil(name=n, coordinates=c)
+                if af_coordinates is None:
                     raise ValueError(f"Could not resolve airfoil: {n}")
-                resolved_coords.append(af.coordinates)
+                resolved_coords.append(af_coordinates)
 
             self.coordinates = np.array(resolved_coords)
             
         self.count = len(self.coordinates)
+        
+    def get_single_airfoil(self,
+        name: str = "Untitled",
+        coordinates: Union[None, str, Path, np.ndarray] = None
+        )->[None, np.ndarray]:
+        name = name
+        
+        if coordinates is None:  # If no coordinates are given
+            try:  # See if it's a NACA airfoil
+                coordinates = get_NACA_coordinates(name=name)
+            except (ValueError, NotImplementedError):
+                try:  # See if it's in the UIUC airfoil database
+                    coordinates = get_UIUC_coordinates(name=name)
+                except FileNotFoundError:
+                    pass
+                except UnicodeDecodeError:
+                    import warnings
+
+                    warnings.warn(
+                        f"Airfoil {self.name} was found in the UIUC airfoil database, but could not be parsed.\n"
+                        f"Check for any non-Unicode-compatible characters in the file, or specify the airfoil "
+                        f"coordinates yourself.",
+                    )
+        else:
+            try:  # If coordinates is a string, assume it's a filepath to a .dat file
+                coordinates = get_file_coordinates(filepath=coordinates)
+            except (OSError, FileNotFoundError, TypeError, UnicodeDecodeError):
+                try:
+                    shape = coordinates.shape
+                    assert len(shape) == 2
+                    assert shape[0] == 2 or shape[1] == 2
+                    if not shape[1] == 2:
+                        coordinates = np.transpose(shape)
+
+                    coordinates = coordinates
+                except AttributeError:
+                    pass
+
+        if coordinates is None:
+            import warnings
+
+            warnings.warn(
+                f"Airfoil {name} had no coordinates assigned, and could not parse the `coordinates` input!",
+                UserWarning,
+                stacklevel=2,
+            )
+            
+        return coordinates
             
     def LE_index(self) -> Union[int, np.ndarray]:
         """
@@ -220,7 +273,7 @@ class AirfoilBatch:
         self,
         translate_x: float = 0.0,
         translate_y: float = 0.0,
-    ) -> "AirfoilBatch":
+    ) -> "Airfoil":
         """
         Translates batch of Airfoils by a given amount.
         Args:
@@ -232,11 +285,11 @@ class AirfoilBatch:
         # Broadcasting adds (2,) to (Batch, N, 2)
         new_coords = self.coordinates + np.array([translate_x, translate_y])
 
-        return AirfoilBatch(names=self.names, coordinates=new_coords)
+        return Airfoil(names=self.names, coordinates=new_coords)
 
     def rotate(
         self, angle: float, x_center: float = 0.0, y_center: float = 0.0
-    ) -> "AirfoilBatch":
+    ) -> "Airfoil":
         """
         Rotates batch of Airfoils clockwise by the specified amount, in radians.
 
@@ -265,13 +318,13 @@ class AirfoilBatch:
         # 3. Translate back
         final_coords = rotated_coords + center_point
 
-        return AirfoilBatch(names=self.names, coordinates=final_coords)
+        return Airfoil(names=self.names, coordinates=final_coords)
 
     def scale(
         self,
         scale_x: float = 1.0,
         scale_y: float = 1.0,
-    ) -> "AirfoilBatch":
+    ) -> "Airfoil":
         """
         Scales batch of Airfoils about the origin.
 
@@ -316,13 +369,13 @@ class AirfoilBatch:
 
         new_coords = np.stack((x, y), axis=2)
 
-        return AirfoilBatch(names=self.names, coordinates=new_coords)
+        return Airfoil(names=self.names, coordinates=new_coords)
 
     def repanel(
         self,
         n_points_per_side: int = 100,
         spacing_function_per_side=cosspace,
-    ) -> "AirfoilBatch":
+    ) -> "Airfoil":
         """
         Returns a repaneled copy of the airfoil batch with cosine-spaced coordinates on the upper and lower surfaces.
 
@@ -383,12 +436,12 @@ class AirfoilBatch:
             joined = np.concatenate((new_u, new_l[1:]), axis=0)
             new_coords_list.append(joined)
 
-        return AirfoilBatch(names=self.names, coordinates=np.array(new_coords_list))
+        return Airfoil(names=self.names, coordinates=np.array(new_coords_list))
     
     def normalize(
         self,
         return_dict: bool = False,
-    ) -> Union["AirfoilBatch", Dict[str, Union["AirfoilBatch", np.ndarray]]]:
+    ) -> Union["Airfoil", Dict[str, Union["Airfoil", np.ndarray]]]:
         """
         Returns a copy of the Airfoil batch with a new set of `coordinates`, such that:
             - The leading edge (LE) is at (0, 0)
@@ -490,7 +543,7 @@ class AirfoilBatch:
         # Einstein summation for batch matrix mult: bni, bij -> bnj
         coords = np.einsum('bni,bij->bnj', coords, rot_matrices)
 
-        new_batch = AirfoilBatch(names=self.names, coordinates=coords)
+        new_batch = Airfoil(names=self.names, coordinates=coords)
 
         if not return_dict:
             return new_batch
@@ -506,7 +559,7 @@ class AirfoilBatch:
     def set_TE_thickness(
         self,
         thickness: float = 0.0,
-    ) -> "AirfoilBatch":
+    ) -> "Airfoil":
         """
         Creates a new modified batch that has a specified trailing-edge thickness.
 
@@ -584,7 +637,7 @@ class AirfoilBatch:
             # --- 5. Recombine ---
             new_coords_list.append(np.concatenate([new_u, new_l], axis=0))
 
-        return AirfoilBatch(names=self.names, coordinates=np.array(new_coords_list))
+        return Airfoil(names=self.names, coordinates=np.array(new_coords_list))
 
     def write_dat(
         self,

@@ -7,6 +7,7 @@ from nnaero.geometry.airfoil_families import (
     get_UIUC_coordinates,
     get_file_coordinates,
 )
+from nnaero.utils.spacing import cosspace
 from scipy import interpolate
 from typing import Union, Dict
 from pathlib import Path
@@ -453,8 +454,8 @@ class Airfoil(Polygon):
     def repanel(
         self,
         n_points_per_side: int = 100,
-        # spacing_function_per_side=np.cosspace,
-        spacing_function_per_side=np.linspace,
+        spacing_function_per_side=cosspace,
+        # spacing_function_per_side=np.linspace,
     ) -> "Airfoil":
         """
         Returns a repaneled copy of the airfoil with cosine-spaced coordinates on the upper and lower surfaces.
@@ -467,7 +468,7 @@ class Airfoil(Polygon):
                 since one point (the leading edge point) is shared by both the upper and lower surfaces.
 
             spacing_function_per_side: Determines how to space the points on each side of the airfoil. Can be
-                `np.linspace` or `np.cosspace`, or any other function of the call signature `f(a, b, n)` that returns
+                `np.linspace` or `cosspace`, or any other function of the call signature `f(a, b, n)` that returns
                 a spaced array of `n` points between `a` and `b`. [function]
 
         Returns: A copy of the airfoil with the new coordinates.
