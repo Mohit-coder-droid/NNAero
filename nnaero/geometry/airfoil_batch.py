@@ -535,8 +535,8 @@ class Airfoil:
         # [[c, -s], [s, c]]
         rot_matrices = np.empty((len(angles), 2, 2))
         rot_matrices[:, 0, 0] = c
-        rot_matrices[:, 0, 1] = -s
-        rot_matrices[:, 1, 0] = s
+        rot_matrices[:, 0, 1] = s   
+        rot_matrices[:, 1, 0] = -s
         rot_matrices[:, 1, 1] = c
         
         # Matrix Multiply: (Batch, N, 2) @ (Batch, 2, 2).T
