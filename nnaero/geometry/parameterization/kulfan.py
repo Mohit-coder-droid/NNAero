@@ -5,7 +5,7 @@ import numpy as np
 from scipy.special import comb
 from typing import Dict, Union, List
 
-def _get_single_kulfan_parameters(
+def _single_parameterize(
     coordinates: np.ndarray,
     n_weights_per_side: int = 8,
     N1: float = 0.5,
@@ -82,7 +82,7 @@ def _get_single_kulfan_parameters(
         "leading_edge_weight": leading_edge_weight,
     }
 
-def get_kulfan_parameters(
+def parameterize(
     airfoils:"Airfoil",
     n_weights_per_side: int = 8,
     N1: float = 0.5,
@@ -137,15 +137,15 @@ def get_kulfan_parameters(
     The following demonstrates the reversibility of this function:
 
     >>> import aerosandbox as asb
-    >>> from aerosandbox.geometry.airfoil.airfoil_families import get_kulfan_parameters
+    >>> from aerosandbox.geometry.airfoil.airfoil_families import parameterize
     >>>
     >>> af = asb.Airfoil("dae11")  # A conventional airfoil
-    >>> params = get_kulfan_parameters(
+    >>> params = parameterize(
     >>>     coordinates=af.coordinates,
     >>> )
     >>> af_reconstructed = asb.Airfoil(
     >>>     name="Reconstructed Airfoil",
-    >>>     coordinates=get_kulfan_coordinates(
+    >>>     coordinates=coordinates(
     >>>         **params
     >>>     )
 
@@ -166,7 +166,7 @@ def get_kulfan_parameters(
             * "TE_thickness" (float): The trailing-edge thickness of the airfoil.
             * "leading_edge_weight" (float): The strength of the leading-edge camber mode shape of the airfoil.
 
-        These can be passed directly into `get_kulfan_coordinates()` to reconstruct the airfoil.
+        These can be passed directly into `coordinates()` to reconstruct the airfoil.
     """
     
     if normalize_coordinates:
@@ -181,7 +181,7 @@ def get_kulfan_parameters(
     # Note: We loop because each airfoil might trigger the 'TE < 0' condition 
     # independently, requiring a different matrix size solve.
     for i in range(n_batch):
-        res = _get_single_kulfan_parameters(
+        res = _single_parameterize(
             coordinates[i],
             n_weights_per_side,
             N1,
@@ -198,4 +198,95 @@ def get_kulfan_parameters(
     }
 
     return batch_results
+
+# A function to convert kulfan weights to original coordinates
+def coordinates(
+    lower_weights: np.ndarray,          # Shape: (N_batch, n_weights) or (n_weights,)
+    upper_weights: np.ndarray,          # Shape: (N_batch, n_weights) or (n_weights,)
+    leading_edge_weight: Union[float, np.ndarray], # Shape: (N_batch,) or float
+    TE_thickness: Union[float, np.ndarray],        # Shape: (N_batch,) or float
+    n_points_per_side: int = 200,       # Default points per side
+    N1: float = 0.5,
+    N2: float = 1.0,
+) -> np.ndarray:
+    """
+    Given a set of Kulfan parameters, computes the coordinates of the resulting airfoil.
+    Returns:
+        coordinates: Shape (N_batch, n_total_points, 2)
+    """
+
+    # --- 1. Standardize Inputs to Batch Format ---
+    # Ensure weights are at least 2D (Batch, Weights)
+    if lower_weights.ndim == 1:
+        lower_weights = lower_weights[np.newaxis, :]
+    if upper_weights.ndim == 1:
+        upper_weights = upper_weights[np.newaxis, :]
+        
+    n_batch, n_weights = lower_weights.shape
+    
+    # Ensure scalars (LE, TE) are arrays of shape (n_batch, 1) for broadcasting
+    if np.isscalar(leading_edge_weight):
+        leading_edge_weight = np.full((n_batch, 1), leading_edge_weight)
+    else:
+        leading_edge_weight = np.array(leading_edge_weight).reshape(n_batch, 1)
+        
+    if np.isscalar(TE_thickness):
+        TE_thickness = np.full((n_batch, 1), TE_thickness)
+    else:
+        TE_thickness = np.array(TE_thickness).reshape(n_batch, 1)
+
+    # --- 2. Generate Base X Coordinates ---
+    beta = np.linspace(0, np.pi, n_points_per_side)
+    x = 0.5 * (1 - np.cos(beta))  # Shape: (n_points,)
+    
+    # --- 3. Precompute Matrices (For Speedup) ---
+    # Class Function C(x)
+    C = (x ** N1) * ((1 - x) ** N2)  # Shape: (n_points,)
+
+    # Bernstein Matrix S (compute this ONCE)
+    # S_matrix shape: (n_weights, n_points)
+    N = n_weights - 1
+    K = comb(N, np.arange(N + 1)).reshape(-1, 1) # Binomial Coeffs
+    r = np.arange(N + 1).reshape(-1, 1)          # Powers
+    x_row = x.reshape(1, -1)
+    
+    # S[r, i] = K[r] * x[i]^r * (1-x[i])^(N-r)
+    S_matrix = K * (x_row ** r) * ((1 - x_row) ** (N - r))
+
+    # --- 4. Calculate Y Coordinates (Vectorized) ---
+    
+    # Core CST Calculation: 
+    # (Batch, Weights) @ (Weights, Points) -> (Batch, Points)
+    y_lower = (lower_weights @ S_matrix) * C
+    y_upper = (upper_weights @ S_matrix) * C
+
+    # Add Trailing Edge Thickness (Linear taper)
+    # Broadcast: (Batch, 1) * (Points,) -> (Batch, Points)
+    y_lower -= x * (TE_thickness / 2)
+    y_upper += x * (TE_thickness / 2)
+
+    # Add Leading Edge Modification
+    # Term: LE * x * (1-x)^(N + 0.5)
+    le_term_base = x * ((1 - x) ** (n_weights + 0.5))
+    y_lower += leading_edge_weight * le_term_base
+    y_upper += leading_edge_weight * le_term_base
+
+    # --- 5. Assemble Final Coordinates ---
+    # We need to concatenate [Upper_Reversed, Lower_Skipping_First]
+    
+    # X coords: Reverse upper, concat lower (skip 0 to avoid dupe LE)
+    # Shape: (2 * n_points - 1,)
+    x_final = np.concatenate([x[::-1], x[1:]])
+    
+    # Y coords: Reverse upper columns, concat lower columns
+    # Shape: (Batch, 2 * n_points - 1)
+    y_final = np.concatenate([y_upper[:, ::-1], y_lower[:, 1:]], axis=1)
+    
+    # Broadcast X to match batch size of Y
+    x_final_batch = np.tile(x_final, (n_batch, 1))
+
+    # Stack into (Batch, Points, 2)
+    coordinates = np.stack([x_final_batch, y_final], axis=2)
+
+    return coordinates
 
