@@ -1,5 +1,10 @@
 # This code has been copied and modified from the repository https://github.com/peterdsharpe/NeuralFoil/
 
+# TODO: Handle multi-point optimization as for each airfoil we will be calculating aero at different angles
+# Making a separate class for each different angle is not a good idea as it's going to consume too much storage, while we only require those storage at the time of calculating aero. 
+
+# TODO: Modify the get_aero function to handle compressible flow (see Aerosandbox)
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -118,7 +123,57 @@ def _squared_mahalanobis_distance(x: torch.Tensor, device: torch.device) -> torc
     
     return dist_sq
 
-def get_aero_from_neuralfoil(
+def _mesh_kulfan_and_conditions(
+    kulfan_parameters: dict[str, Union[float, np.ndarray, list]],
+    alpha: Union[float, np.ndarray],
+    Re: Union[float, np.ndarray]
+):
+    """
+    Creates a cross-product (meshgrid) of Airfoils and Operating Conditions.
+    
+    Args:
+        kulfan_parameters: Dict with weights of shape (N_airfoils, 8)
+        alpha: Array of shape (N_alpha,)
+        Re: Array of shape (N_alpha,) - Must be paired with alpha
+        
+    Returns:
+        tuple: (meshed_kulfan, meshed_alpha, meshed_Re, (N_airfoils, N_alpha))
+        
+    Resulting shapes will be (N_airfoils * N_alpha, ...)
+    """
+    # 1. Determine Sizes
+    w_u = np.atleast_2d(kulfan_parameters["upper_weights"]) 
+    N_airfoils = w_u.shape[0]
+    
+    alpha = np.atleast_1d(alpha)
+    Re = np.atleast_1d(Re)
+    N_alpha = alpha.shape[0]
+
+    # Validate Re/Alpha pairing
+    if Re.shape[0] != N_alpha:
+        raise ValueError(f"Alpha and Re must have same length. Got {N_alpha} and {Re.shape[0]}")
+
+    # (N, 8) -> (N * M, 8)
+    meshed_kulfan = {}
+    for key, val in kulfan_parameters.items():
+        val_arr = np.array(val)
+        
+        if val_arr.ndim == 1 and val_arr.shape[0] == N_airfoils:
+            meshed_kulfan[key] = np.repeat(val_arr, N_alpha, axis=0)
+        elif val_arr.ndim > 1 and val_arr.shape[0] == N_airfoils:
+            meshed_kulfan[key] = np.repeat(val_arr, N_alpha, axis=0)
+        elif val_arr.ndim == 0 or val_arr.shape[0] == 1:
+             meshed_kulfan[key] = np.repeat(val_arr, N_airfoils * N_alpha, axis=0)
+        else:
+             meshed_kulfan[key] = val_arr
+
+    # (M,) -> (N * M,)
+    meshed_alpha = np.tile(alpha, N_airfoils)
+    meshed_Re = np.tile(Re, N_airfoils)
+    
+    return meshed_kulfan, meshed_alpha, meshed_Re, (N_airfoils, N_alpha)
+
+def get_aero_from_kulfan_single(
     kulfan_parameters: dict[str, Union[float, np.ndarray, list]],
     alpha: Union[float, np.ndarray],
     Re: Union[float, np.ndarray],
@@ -324,3 +379,65 @@ def get_aero_from_neuralfoil(
 
         return results
     
+def get_aero_from_kulfan(
+    kulfan_parameters: dict[str, Union[float, np.ndarray, list]],
+    alpha: Union[float, np.ndarray],
+    Re: Union[float, np.ndarray],
+    n_crit: Union[float, np.ndarray] = 9.0,
+    xtr_upper: Union[float, np.ndarray] = 1.0,
+    xtr_lower: Union[float, np.ndarray] = 1.0,
+    model_size: str = "medium",
+    device: str = "cpu",
+    model_path: str = None 
+) -> dict[str, np.ndarray]:
+    """
+    PyTorch implementation of NeuralFoil inference
+    """
+    n_airfoils = np.atleast_2d(kulfan_parameters["upper_weights"]).shape[0]
+    n_conds = np.atleast_1d(alpha).shape[0]
+    
+    needs_meshing = (n_airfoils > 1) and (n_conds > 1) and (n_airfoils != n_conds)
+
+    if needs_meshing:
+        # 1. Expand inputs to (N*M)
+        m_kulfan, m_alpha, m_Re, original_shape = _mesh_kulfan_and_conditions(
+            kulfan_parameters, alpha, Re
+        )
+        
+        # 2. Run Inference on flattened arrays
+        # The model sees one massive batch of size N*M
+        flat_results = get_aero_from_kulfan_single(m_kulfan, m_alpha, m_Re,
+                                                n_crit=n_crit,
+                                                xtr_upper=xtr_upper,
+                                                xtr_lower=xtr_lower,
+                                                model_size=model_size,
+                                                device=device,
+                                                model_path=model_path
+                                                   )
+        
+        # 3. Reshape Outputs back to (N_airfoils, N_alpha)
+        shaped_results = {}
+        N, M = original_shape
+        
+        for key, val in flat_results.items():
+            if val.size == N * M:
+                shaped_results[key] = val.reshape(N, M)
+            
+            else:
+                 shaped_results[key] = val
+                 
+        return shaped_results
+
+    else:
+        # (1-to-1 or 1-to-N broadcasting)
+        return get_aero_from_kulfan_single(kulfan_parameters, alpha, Re,
+                                                n_crit=n_crit,
+                                                xtr_upper=xtr_upper,
+                                                xtr_lower=xtr_lower,
+                                                model_size=model_size,
+                                                device=device,
+                                                model_path=model_path)
+
+def get_aero():
+    pass
+
