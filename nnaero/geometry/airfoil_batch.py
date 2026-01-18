@@ -232,7 +232,7 @@ class Airfoil:
         
         dot = upper_vec[:, 0] * lower_vec[:, 0] + upper_vec[:, 1] * lower_vec[:, 1]
 
-        return np.degrees(np.arctan2(cross, dot))
+        return np.expand_dims(np.degrees(np.arctan2(cross, dot)),axis=1)
     
     def LE_radius(self, npts: int = 7) -> np.ndarray:
         """
