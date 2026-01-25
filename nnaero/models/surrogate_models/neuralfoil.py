@@ -11,6 +11,9 @@ import numpy as np
 from typing import Union
 from huggingface_hub import hf_hub_download, utils
 
+from nnaero.utils import *
+from nnaero.modelling.splines import cosine_hermite_patch
+
 HF_REPO_ID = "MohitAndSahu/NNAero"
 
 # Cache for distribution tensors to avoid moving to GPU every inference call
@@ -438,6 +441,199 @@ def get_aero_from_kulfan(
                                                 device=device,
                                                 model_path=model_path)
 
-def get_aero():
-    pass
+# TODO: Include 360 degree effects
+# TODO: Implement control surfaces
+def get_aero(
+    kulfan_parameters: dict[str, Union[float, np.ndarray, list]],
+    alpha: Union[float, np.ndarray],
+    Re: Union[float, np.ndarray],
+    mach: Union[float, np.ndarray] = 0.0,
+    n_crit: Union[float, np.ndarray] = 9.0,
+    xtr_upper: Union[float, np.ndarray] = 1.0,
+    xtr_lower: Union[float, np.ndarray] = 1.0,
+    max_thickness: Union[float, np.ndarray] = None,
+    model_size: str = "medium",
+    device: str = "cpu",
+    model_path: str = None ,
+    ):
+    alpha = np.atleast_1d(alpha)
+    Re = np.atleast_1d(Re)
+    mach = np.atleast_1d(mach)
+    
+    w_u = np.atleast_2d(kulfan_parameters["upper_weights"])
+    N_airfoils = w_u.shape[0]
+    N_conds = alpha.shape[0]
+    
+    # --- 3. NeuralFoil Inference (The "Raw" Pass) ---
+    alpha_input = np.mod(alpha  + 180, 360) - 180
 
+    raw_results = get_aero_from_kulfan(
+        kulfan_parameters=kulfan_parameters,
+        alpha=alpha_input,
+        Re=Re,
+        n_crit=n_crit,
+        xtr_upper=xtr_upper,
+        xtr_lower=xtr_lower,
+        model_size=model_size,
+        device=device,
+        model_path=model_path
+    )
+    
+    CL = raw_results["CL"]
+    CD = raw_results["CD"]
+    CM = raw_results["CM"]
+    
+    N_bl = 32 
+    
+    if N_conds!=1:
+        u_ue = np.stack([raw_results[f"upper_bl_ue/vinf_{i}"] for i in range(N_bl)],axis=2)
+        l_ue = np.stack([raw_results[f"lower_bl_ue/vinf_{i}"] for i in range(N_bl)],axis=2)
+    else:
+        u_ue = np.stack([raw_results[f"upper_bl_ue/vinf_{i}"] for i in range(N_bl)],axis=1)
+        l_ue = np.stack([raw_results[f"lower_bl_ue/vinf_{i}"] for i in range(N_bl)],axis=1)
+    
+    if u_ue.ndim==3:
+        u_ue = u_ue.reshape(-1, N_bl)
+        l_ue = l_ue.reshape(-1, N_bl)
+    
+    Cpmin_0 = [softmin( 
+        *np.concatenate([1 - u_ue**2, 1 - l_ue**2], axis=1)[i], softness=0.01
+    ) for i in range(u_ue.shape[0])]
+    
+    Top_Xtr = raw_results["Top_Xtr"]
+    Bot_Xtr = raw_results["Bot_Xtr"]
+
+    # --- 4B. Compressibility Effects ---
+    Cpmin_0 = np.array([softmin(Cpmin_0[i], 0, softness=0.001) for i in range(len(Cpmin_0))])
+    
+    if N_conds!=1:
+        Cpmin_0 = Cpmin_0.reshape(N_airfoils, N_conds)
+    
+    mach_crit = (
+        1.011571026701678
+        - Cpmin_0
+        + 0.6582431351007195 * (-Cpmin_0) ** 0.6724789439840343
+    ) ** -0.5504677038358711
+    
+    mach_dd = mach_crit + (0.1 / 320) ** (1 / 3)
+
+    # Beta / Prandtl-Glauert
+    gamma = 1.4
+    beta_sq = 1 - mach**2
+    beta = (
+            softmax(
+                beta_sq,
+                -beta_sq,
+                softness=0.5,  
+            )
+            ** 0.5
+        )
+
+    CL = CL / beta
+    CM = CM / beta
+    Cpmin = Cpmin_0 / beta
+        
+    ### Step 3: modify CL based on buffet and supersonic considerations
+    # Accounts approximately for the lift drop due to buffet.
+    mach = np.atleast_1d(mach) # Shape: (N_cond,) or (1,)
+    mach_dd = np.atleast_2d(mach_dd) # Shape: (N_airfoils, N_cond)
+    max_thickness = np.atleast_1d(max_thickness) # Shape: (N_airfoils,) or (N_airfoils, 1) 
+
+    if mach.ndim == 1 and mach.shape[0] == N_conds:
+        # (N_conds,) -> (1, N_conds) -> (N_airfoils, N_conds)
+        mach_grid = np.tile(mach, (N_airfoils, 1))
+    elif mach.ndim == 1 and mach.shape[0] == 1:
+        # Scalar case: fill grid
+        mach_grid = np.full((N_airfoils, N_conds), mach[0])
+    else:
+        mach_grid = mach
+
+    if max_thickness.ndim == 1 and max_thickness.shape[0] == N_airfoils:
+        # (N_airfoils,) -> (N_airfoils, 1) -> (N_airfoils, N_conds)
+        max_thickness_grid = np.tile(max_thickness[:, None], (1, N_conds))
+    elif max_thickness.ndim == 0:
+        max_thickness_grid = np.full((N_airfoils, N_conds), max_thickness)
+    else:
+        max_thickness_grid = max_thickness
+
+
+    buffet_factor = blend(
+        50 * (mach_grid - (mach_dd + 0.04)),  
+        blend((mach_grid - 1) / 0.1, 1, 0.5),
+        1,
+    )
+
+    cla_supersonic_ratio_factor = blend(
+        (mach_grid - 1) / 0.1,
+        4 / (2 * np.pi),
+        1,
+    )
+
+    CL = CL * buffet_factor * cla_supersonic_ratio_factor
+
+    if max_thickness is not None:
+        term_quartic = 80 * (mach_grid - mach_crit) ** 4
+        
+        term_hermite = cosine_hermite_patch(
+            mach_grid,
+            x_a=mach_dd,
+            x_b=1.1,
+            f_a=80 * (0.1 / 320) ** (4 / 3),
+            f_b=0.8 * max_thickness_grid, 
+            dfdx_a=0.1,
+            dfdx_b=-0.8 * max_thickness_grid * 8, 
+        )
+        
+        term_supersonic = blend(
+            8 * 2 * (mach_grid - 1.1) / (1.2 - 0.8),
+            0.8 * 0.8 * max_thickness_grid, 
+            1.2 * 0.8 * max_thickness_grid, 
+        )
+
+        mask_subcrit = mach_grid < mach_crit
+        mask_drag_rise = (mach_grid >= mach_crit) & (mach_grid < mach_dd)
+        mask_hermite = (mach_grid >= mach_dd) & (mach_grid < 1.1)
+        
+        CD_wave = np.select(
+            condlist=[mask_subcrit, mask_drag_rise, mask_hermite],
+            choicelist=[0.0, term_quartic, term_hermite],
+            default=term_supersonic
+        )
+        
+        CD = CD + CD_wave
+
+
+    has_ac_shift = np.clip((mach_grid - (mach_dd + 0.06)) / 0.06, 0, 1)
+
+    if np.ndim(alpha) == 1 and len(alpha) == N_conds:
+        alpha_grid = np.tile(alpha, (N_airfoils, 1))
+    else:
+        alpha_grid = alpha
+
+    CM_shift = -0.25 * cosd(alpha_grid) * CL - 0.25 * sind(alpha_grid) * CD
+
+    CM = CM + blend(
+        has_ac_shift,
+        CM_shift,
+        0,
+    )
+
+    results = {
+        "analysis_confidence": raw_results["analysis_confidence"],
+        "CL": CL,
+        "CD": CD,
+        "CM": CM,
+        "Cpmin": Cpmin,
+        "Top_Xtr": Top_Xtr,
+        "Bot_Xtr": Bot_Xtr,
+        "mach_crit": mach_crit,
+        "mach_dd": mach_dd,
+        "Cpmin_0": Cpmin_0
+    }
+    
+    # Add BL arrays (pass through)
+    for k, v in raw_results.items():
+        if "bl_" in k:
+            results[k] = v
+
+    return results
